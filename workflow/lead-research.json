@@ -1,0 +1,729 @@
+{
+  "name": "Lead Research",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Lead Research Intake",
+        "formDescription": "Enter a company and its website to generate a research summary.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Company Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Website"
+            },
+            {
+              "fieldLabel": "City or Region"
+            },
+            {
+              "fieldLabel": "Re-research",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "No"
+                  },
+                  {
+                    "option": "Yes"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -944,
+        -352
+      ],
+      "id": "9263b6cc-1091-492e-a54e-69c0727b36b1",
+      "name": "On form submission",
+      "webhookId": "31ab55c2-9dfb-4e51-9521-df02121015bb"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('On form submission').first().json['Website'] }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "n8n-lead-research (personal portfolio project)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -720,
+        -128
+      ],
+      "id": "f328e031-33e9-4b19-af14-4675d006500f",
+      "name": "HTTP Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "pageText",
+              "cssSelector": "body",
+              "skipSelectors": "script, style, noscript, nav, footer"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -528,
+        -144
+      ],
+      "id": "343d91c1-8bd7-4860-8984-04cdcb74c870",
+      "name": "HTML"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_CHARS = 6000;\nconst MIN_WORDS = 5;\nconst keepAnyway = /@|www\\.|\\+\\d|\\d{4} /;\nconst linkPattern = new RegExp('\\\\[(https?:|data:|tel:|mailto:|/)[^\\\\]]*\\\\]', 'g');\n\nfor (const item of $input.all()) {\n  let text = item.json.pageText || '';\n  text = text.replace(linkPattern, ' ');\n  text = text.replace(/[ \\t]+/g, ' ');\n\n  const seen = new Set();\n  const kept = [];\n\n  for (let line of text.split('\\n')) {\n    line = line.replace(/^[*\\s]+/, '').trim();\n    if (!line || seen.has(line)) continue;\n    seen.add(line);\n    const words = line.split(' ').length;\n    if (words >= MIN_WORDS || keepAnyway.test(line)) kept.push(line);\n  }\n\n  const clean = kept.join('\\n');\n  item.json.pageTextClean = clean.slice(0, MAX_CHARS);\n  item.json.pageTextChars = clean.length;\n  item.json.pageTextTruncated = clean.length > MAX_CHARS;\n  item.json.pageTextRawChars = text.length;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        -144
+      ],
+      "id": "9d1ef981-63fd-4d38-8a69-5cbfb8b2706a",
+      "name": "Clean page text"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-5",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Company name: {{ $('On form submission').item.json['Company Name'] }}\nWebsite: {{ $('On form submission').item.json['Website'] || 'not provided' }}\nLocation hint: {{ $('On form submission').item.json['City or region'] || 'not provided' }}\nText extracted from the homepage. It may be incomplete, navigation-heavy, or empty:\n---\n{{ $json.pageTextClean }}\n---\nHomepage extraction yielded {{ $json.pageTextChars }} usable characters. Truncated: {{ $json.pageTextTruncated }}\n\nUse web search to fill gaps and to corroborate what the homepage claims. Return the JSON object only."
+            }
+          ]
+        },
+        "simplify": false,
+        "options": {
+          "system": "You are a research assistant for a B2B sales team. You produce factual company summaries that are written into a CRM.  Rules: \n\n1. Every claim must come from the page text provided to you or from a web search result you actually retrieved. Do not use general knowledge about the company. \n2. If a field is not supported by a source, return null. Never guess or infer. \n3. A company with a poor, thin, or unreadable website is not a negative signal. Missing information is a fact about the sources, not about the company. Never characterise a company based on what you could not find.\n4. Return ONLY a JSON object. No markdown fences, no commentary before or after. \n5. If no website was supplied, or the homepage extraction returned 0 characters, there is no usable homepage. In that case ignore the Website line completely. Do not require search results to match it, and do not treat its absence as evidence about the company.\n6. When the supplied URL is unusable, search on the company name together with any location information available. If you find an official site whose company name clearly matches, use it as a source and state in research_notes that the supplied URL failed and which site you used instead. If nothing clearly matches, return nulls with research_status \"no usable source\".\n7. Fill registration_number and tax_number only from an official company registry or the company's own site. Never infer or reconstruct them. These are identity fields and a wrong value is worse than a null.\n8. Sources are tiered. The company registry (Cégbíróság, e-cégjegyzék, Cégközlöny, e-beszámoló) and licensed redistributors of registry data are the only acceptable sources for registration_number, tax_number, legal name, and any financial or headcount figure. Directory listings, marketplaces, review sites and social pages may corroborate but must never establish those fields. The company's own site is acceptable for registration_number and tax_number where published in an impressum or terms page, since publication is legally required.\n9. Record in identity_source the URL that established registration_number and tax_number, and say in research_notes if any figure came from a redistributor's own estimate rather than from filed accounts.\n10. Hungarian sole traders (egyéni vállalkozó) are registered separately from companies and will not appear in the company register. If no company register entry is found, do not treat that as a negative signal or as evidence the business is not legitimate.\n\nReturn exactly this shape: {   \"what_they_do\": string or null,   \"trade_or_supplier\": \"trade contractor\" | \"supplier or retailer\" | \"both\" | null,   \"services\": array of strings,   \"location\": string or null,   \"size_signals\": string or null,   \"named_projects_or_clients\": array of strings,   \"contact\": { \"phone\": string or null, \"email\": string or null },   \"research_status\": \"good\" | \"thin\" | \"no usable source\",   \"research_notes\": string,   \"sources\": array of strings,   \"registration_number\": string or null, \"tax_number\": string or null, \"identity_source\": string or null}",
+          "webSearch": true,
+          "maxUses": 3,
+          "maxTokens": 4000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -192,
+        -144
+      ],
+      "id": "0ff1c9de-4f6d-434a-9efa-857a65cc4720",
+      "name": "Claude Search",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "anthropicApi": {
+          "id": "DBQqSGWAQzGQuRzu",
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const form = $('On form submission').first().json;\n\n// Rate card. Update from the pricing page when models or rates change.\nconst RATES = {\n  model: 'claude-sonnet-5',\n  usd_per_mtok_in: 2.00,\n  usd_per_mtok_out: 10.00,\n  usd_per_web_search: 0.01,\n};\n\nconst submittedAt = form.submittedAt ? new Date(form.submittedAt).getTime() : null;\n\nconst normalize = (u) => String(u).trim().toLowerCase().replace(/\\/+$/, '');\nconst tidy = (arr) => [...new Set((arr || []).map(normalize))].sort();\nconst canon = (v) => (v ? String(v).toUpperCase().replace(/[^A-Z0-9]/g, '') : null);\nconst list = (v) => (Array.isArray(v) && v.length ? v.join('; ') : null);\n\nlet companyKey = null;\ntry {\n  companyKey = $('Normalize Company Key').first().json.company_key;\n} catch (e) {\n  companyKey = null;\n}\n\nfunction extractText(json) {\n  if (typeof json.text === 'string') return json.text;\n  const content = json.content || (json.message && json.message.content);\n  if (Array.isArray(content)) {\n    return content.filter(b => b.type === 'text').map(b => b.text).join('\\n').trim();\n  }\n  if (typeof content === 'string') return content;\n  return '';\n}\n\nfunction extractJson(s) {\n  const tick = String.fromCharCode(96);\n  const fence = tick + tick + tick;\n  const fencedRe = new RegExp(fence + '(?:json)?\\\\s*([\\\\s\\\\S]*?)' + fence, 'i');\n  const fenced = s.match(fencedRe);\n  if (fenced) return fenced[1].trim();\n\n  const start = s.indexOf('{');\n  const end = s.lastIndexOf('}');\n  if (start !== -1 && end > start) return s.slice(start, end + 1);\n  return s.trim();\n}\n\nfunction retrievedUrls(json) {\n  const urls = [];\n  for (const b of (json.content || [])) {\n    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {\n      for (const r of b.content) {\n        if (r.url) urls.push(r.url);\n      }\n    }\n  }\n  return urls;\n}\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const full = extractText(item.json).trim();\n  const candidate = extractJson(full);\n  const stopReason = item.json.stop_reason || null;\n\n  const usage = item.json.usage || {};\n  const inTok = usage.input_tokens || 0;\n  const outTok = usage.output_tokens || 0;\n  const searches = (usage.server_tool_use && usage.server_tool_use.web_search_requests) || 0;\n\n  const costUsd = (inTok / 1e6) * RATES.usd_per_mtok_in\n                + (outTok / 1e6) * RATES.usd_per_mtok_out\n                + searches * RATES.usd_per_web_search;\n\n  const durationSec = submittedAt\n    ? Math.round((Date.now() - submittedAt) / 100) / 10\n    : null;\n\n  let fetchedUrl = null;\n  try {\n    const cleaned = $('Clean page text').first().json;\n    if (cleaned && cleaned.pageTextChars > 0 && form['Website']) {\n      fetchedUrl = normalize(form['Website']);\n    }\n  } catch (e) {\n    fetchedUrl = null;\n  }\n\n  const retrieved = tidy(retrievedUrls(item.json).concat(fetchedUrl ? [fetchedUrl] : []));\n\n  const base = {\n    company_key: companyKey,\n    company: form['Company Name'],\n    website: form['Website'] || null,\n    researched_at: new Date().toISOString(),\n    model: RATES.model,\n    input_tokens: inTok,\n    output_tokens: outTok,\n    web_searches: searches,\n    cost_usd_est: Number(costUsd.toFixed(4)),\n    duration_sec: durationSec,\n  };\n\n  let parsed = null;\n  let parseError = null;\n\n  try {\n    parsed = JSON.parse(candidate);\n  } catch (e) {\n    const prefix = stopReason === 'max_tokens' ? 'response truncated at token limit: ' : '';\n    parseError = prefix + e.message;\n  }\n\n  if (!parsed) {\n    out.push({ json: {\n      ...base,\n      status: 'parse_error',\n      parse_error: parseError,\n      stop_reason: stopReason,\n      raw_response: full.slice(0, 1000),\n      sources_retrieved: retrieved.join('; ') || null,\n    }});\n    continue;\n  }\n\n  const contact = parsed.contact || {};\n  const claimed = tidy(parsed.sources);\n  const unverified = claimed.filter(u => !retrieved.includes(u));\n\n  out.push({ json: {\n    ...base,\n    status: 'ok',\n    stop_reason: stopReason,\n    what_they_do: parsed.what_they_do || null,\n    trade_or_supplier: parsed.trade_or_supplier || null,\n    services: list(parsed.services),\n    location: parsed.location || null,\n    size_signals: parsed.size_signals || null,\n    named_projects_or_clients: list(parsed.named_projects_or_clients),\n    phone: contact.phone || null,\n    email: contact.email || null,\n    registration_number: parsed.registration_number || null,\n    registration_number_key: canon(parsed.registration_number),\n    tax_number: parsed.tax_number || null,\n    tax_number_key: canon(parsed.tax_number),\n    identity_source: parsed.identity_source || null,\n    research_status: parsed.research_status || null,\n    research_notes: parsed.research_notes || null,\n    sources: claimed.join('; ') || null,\n    sources_retrieved: retrieved.join('; ') || null,\n    sources_unverified: unverified.join('; ') || null,\n  }});\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        -272
+      ],
+      "id": "282c6ac7-e75c-4f5d-8ddd-c3ca3d31afb8",
+      "name": "Parse Research JSON"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "researched_at",
+              "displayName": "researched_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website",
+              "displayName": "website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "what_they_do",
+              "displayName": "what_they_do",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "trade_or_supplier",
+              "displayName": "trade_or_supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "services",
+              "displayName": "services",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "size_signals",
+              "displayName": "size_signals",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "named_projects_or_clients",
+              "displayName": "named_projects_or_clients",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sources",
+              "displayName": "sources",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sources_retrieved",
+              "displayName": "sources_retrieved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sources_unverified",
+              "displayName": "sources_unverified",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "parse_error",
+              "displayName": "parse_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "research_status",
+              "displayName": "research_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "research_notes",
+              "displayName": "research_notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        288,
+        -224
+      ],
+      "id": "f0b461f9-4c92-499c-97d9-017bcb2c8917",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleApi": {
+          "id": "wpBnAEIIxUpNv16n",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    pageTextClean: '',\n    pageTextChars: 0,\n    pageTextTruncated: false,\n    pageTextRawChars: 0,\n    fetch_failed: true,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        48
+      ],
+      "id": "04700089-f545-4429-8ce9-d2f857c39c83",
+      "name": "Fetch Failed"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\nfor (const item of $input.all()) {\n  const raw = String(item.json['Company Name'] || '');\n  const key = raw\n    .normalize('NFD')\n    .replace(/\\p{Diacritic}/gu, '')\n    .toLowerCase()\n    .replace(/\\b(kft|bt|zrt|nyrt|kkt|ev|ltd|llc|inc|gmbh)\\b\\.?/g, '')\n    .replace(/[^a-z0-9]+/g, ' ')\n    .trim()\n    .replace(/\\s+/g, '-');\n\n  items.push({ json: { ...item.json, company_key: key } });\n}\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        -352
+      ],
+      "id": "0f80d655-a390-4656-931a-c1ffffcf24ae",
+      "name": "Normalize Company Key"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE/edit#gid=0"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "company_key",
+              "lookupValue": "={{ $json.company_key }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -576,
+        -352
+      ],
+      "id": "04c52898-c104-4380-a02b-75741b79d5f6",
+      "name": "Get row(s) in sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "wpBnAEIIxUpNv16n",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d49ba434-6279-4cf0-88e6-0185e4675e03",
+              "leftValue": "={{ $json.should_research }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -944,
+        -144
+      ],
+      "id": "a414459c-75f8-4015-885a-3584e9cf9bb4",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_AGE_DAYS = 30;\nconst TZ = 'Europe/Budapest';\n\nconst form = $('On form submission').first().json;\nconst key = $('Normalize Company Key').first().json.company_key;\nconst force = String(form['Re-research'] || '').toLowerCase() === 'yes';\n\n// only a successful run counts as research already done, so an error row\n// never blocks a retry\nconst rows = $input.all()\n  .map(i => i.json || {})\n  .filter(r => r.company_key && String(r.status).toLowerCase() === 'ok');\n\nrows.sort((a, b) => new Date(b.researched_at) - new Date(a.researched_at));\nconst existing = rows[0] || null;\n\nconst last = existing && existing.researched_at ? new Date(existing.researched_at) : null;\nconst ageMs = last ? Date.now() - last.getTime() : null;\nconst ageDays = ageMs === null ? null : ageMs / 86400000;\nconst stale = ageDays !== null && ageDays > MAX_AGE_DAYS;\n\nconst lastLocal = last\n  ? DateTime.fromJSDate(last).setZone(TZ).toFormat('yyyy-LL-dd HH:mm')\n  : null;\n\nlet ageText = null;\nif (ageMs !== null) {\n  const hours = ageMs / 3600000;\n  if (hours < 1) {\n    ageText = Math.max(1, Math.round(ageMs / 60000)) + ' minutes ago';\n  } else if (hours < 48) {\n    ageText = Math.round(hours) + ' hours ago';\n  } else {\n    ageText = Math.round(ageDays) + ' days ago';\n  }\n}\n\nlet reason;\nif (!existing) {\n  reason = 'no successful research on file';\n} else if (force) {\n  reason = 'forced re-research, last done ' + ageText;\n} else if (stale) {\n  reason = 'past the ' + MAX_AGE_DAYS + ' day freshness window, last done ' + ageText;\n} else {\n  reason = 'skipped, researched ' + ageText;\n}\n\nreturn [{ json: {\n  company_key: key,\n  should_research: (!existing) || force || stale,\n  last_researched_at: existing ? existing.researched_at : null,\n  last_researched_local: lastLocal,\n  age_days: ageDays === null ? null : Math.round(ageDays * 10) / 10,\n  age_text: ageText,\n  decision_reason: reason,\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -352
+      ],
+      "id": "2485a429-4806-49e5-8002-03a7d00196a5",
+      "name": "Decide: research or skip"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Already in the log",
+        "completionMessage": "={{ $json.company_key }} was already researched {{ $json.age_text }}, at {{ $json.last_researched_local }} Budapest time. Nothing was written and no API call was made. To research it again anyway, resubmit with Re-research set to Yes.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -688,
+        48
+      ],
+      "id": "f4b9b611-04d5-4b27-9a1a-92ad16758053",
+      "name": "Already in the Log",
+      "webhookId": "58aca3fb-3f04-43a3-87e3-aa0c262aea98"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Researched",
+        "completionMessage": "={{ $json.company }} written to the log with status {{ $json.status }}. Searches: {{ $json.web_searches }}, estimated cost {{ $json.cost_usd_est }} USD.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        496,
+        -144
+      ],
+      "id": "c51eabd6-91a5-4485-b4d3-49730a2f2a19",
+      "name": "Researched",
+      "webhookId": "c7b1ae32-ac26-44eb-a162-a62a06933986"
+    },
+    {
+      "parameters": {
+        "jsCode": "const form = $('On form submission').first().json;\n\nlet companyKey = null;\ntry {\n  companyKey = $('Normalize Company Key').first().json.company_key;\n} catch (e) {\n  companyKey = null;\n}\n\nconst err = $input.first().json || {};\nconst rawErr = err.error;\nconst message =\n  (rawErr && typeof rawErr === 'object' && rawErr.message) ? rawErr.message :\n  (typeof rawErr === 'string' && rawErr) ? rawErr :\n  err.message || 'Claude API call failed after retry';\n\nconst submitted = form.submittedAt ? new Date(form.submittedAt).getTime() : null;\n\nreturn [{ json: {\n  company_key: companyKey,\n  company: form['Company Name'],\n  website: form['Website'] || null,\n  researched_at: new Date().toISOString(),\n  model: 'claude-sonnet-5',\n  status: 'api_error',\n  error_message: String(message).slice(0, 500),\n  input_tokens: 0,\n  output_tokens: 0,\n  web_searches: 0,\n  cost_usd_est: 0,\n  duration_sec: submitted ? Math.round((Date.now() - submitted) / 100) / 10 : null,\n}}];;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        128,
+        64
+      ],
+      "id": "4facb974-9fe7-4d3d-9934-de2487b56763",
+      "name": "API Failed"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Normalize Company Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML": {
+      "main": [
+        [
+          {
+            "node": "Clean page text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean page text": {
+      "main": [
+        [
+          {
+            "node": "Claude Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Search": {
+      "main": [
+        [
+          {
+            "node": "Parse Research JSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Research JSON": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Failed": {
+      "main": [
+        [
+          {
+            "node": "Claude Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Company Key": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Decide: research or skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already in the Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide: research or skip": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Researched",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Failed": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1691aec1-dff5-4cb4-8ef4-a9e9a789dd82",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5792c650131ba6bc2e1212b408517a7eed6707a6af9fea7ddf83b5c48374e080"
+  },
+  "nodeGroups": [],
+  "id": "H8Sk3ik1r0AOeK2Z",
+  "tags": []
+}

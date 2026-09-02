@@ -1,0 +1,22 @@
+# credentials and secrets, never commit
+*.key
+*.pem
+service-account*.json
+gcp-*.json
+.env
+.env.*
+
+# local scratch
+scratch/
+*.tmp
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# private planning notes, not for publication
+n8n-project-brief.md
+
+# unredacted local copy of the export
+workflow/.lead-research.original.json
