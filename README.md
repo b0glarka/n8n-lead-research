@@ -116,8 +116,6 @@ This project is not:
 
 A citation marker occasionally leaks from the model into a `research_notes` value. It is cosmetic and would be stripped in the parse step.
 
-The sample sheet has a duplicated `identity_source` column, left in as exported.
-
 ## Scope
 
 Deliberately excluded: no evaluation set, no agent framework, no hosting or tunnelling, no scheduled batch runs.
